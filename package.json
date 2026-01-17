@@ -1,7 +1,33 @@
 {
   "name": "ai-movie-writer",
-  "version": "0.1.0",
-  "private": true,
+  "version": "1.0.0",
+  "description": "Multi-agent AI screenplay generation system powered by Next.js and Vercel AI SDK",
+  "author": "AI ScriptWriter Team",
+  "license": "MIT",
+  "homepage": "https://github.com/YOUR_USERNAME/ai-movie-writer#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YOUR_USERNAME/ai-movie-writer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/YOUR_USERNAME/ai-movie-writer/issues"
+  },
+  "keywords": [
+    "ai",
+    "screenplay",
+    "scriptwriting",
+    "multi-agent",
+    "nextjs",
+    "vercel-ai-sdk",
+    "creative-writing",
+    "movie-script",
+    "artificial-intelligence"
+  ],
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "private": false,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
