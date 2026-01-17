@@ -1,6 +1,16 @@
-# AI 编剧室 (AI ScriptWriter)
+# 🎬 AI 编剧室 (AI ScriptWriter)
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js)](https://nextjs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript)](https://www.typescriptlang.org/)
+[![Vercel AI SDK](https://img.shields.io/badge/Vercel%20AI%20SDK-6.0-green)](https://sdk.vercel.ai/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 一个基于多智能体系统（MAS）的电影剧本创作应用，通过 AI 智能体协作完成剧本写作。
+
+<div align="center">
+  <strong>✨ 多智能体协作 | 🎭 自动角色生成 | 📝 标准剧本格式 | 🚀 实时可视化</strong>
+</div>
 
 ## 🎬 项目概述
 
