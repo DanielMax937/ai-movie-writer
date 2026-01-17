@@ -1,0 +1,14 @@
+{
+  "buildCommand": "npm run build",
+  "devCommand": "npm run dev",
+  "installCommand": "npm install",
+  "framework": "nextjs",
+  "outputDirectory": ".next",
+  "regions": ["iad1"],
+  "env": {
+    "CUSTOM_API_BASE_URL": "@custom_api_base_url",
+    "CUSTOM_API_KEY": "@custom_api_key",
+    "CUSTOM_MODEL_NAME": "@custom_model_name",
+    "ENABLE_STRUCTURED_OUTPUTS": "@enable_structured_outputs"
+  }
+}
