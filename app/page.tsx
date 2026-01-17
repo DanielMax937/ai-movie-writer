@@ -44,10 +44,13 @@ export default function HomePage() {
       await orchestrator.initializeRoom(theme);
       setShowCharacters(true);
 
-      // Small delay to show characters
-      setTimeout(async () => {
+      // Small delay to show characters, then start writing
+      setTimeout(() => {
         setShowCharacters(false);
-        await orchestrator.startWriting();
+        // Start writing (don't await here, let it run async)
+        orchestrator.startWriting().catch(err => {
+          console.error('Writing error:', err);
+        });
       }, 3000);
     } catch (error) {
       console.error('Start error:', error);

@@ -32,11 +32,8 @@ export async function generateCharacters(theme: string): Promise<Character[]> {
     temperature: 0.8,
   });
 
-  const { object } = await generateObject({
+  const { text } = await generateText({
     model,
-    schema: z.object({
-      characters: z.array(CharacterSchema).length(4).describe('4个独特的角色'),
-    }),
     prompt: `你是一位资深的角色设计师。基于以下电影主题，创造4个独特且互补的角色。
 
 主题：${theme}
@@ -48,13 +45,41 @@ export async function generateCharacters(theme: string): Promise<Character[]> {
 4. 说话风格要有辨识度
 5. 所有内容必须使用中文
 
-请创造4个角色。`,
+**重要：你必须以纯JSON格式输出，不要包含任何markdown标记或其他文字。**
+
+输出格式示例：
+{
+  "characters": [
+    {
+      "name": "张三",
+      "bio": "一个充满正义感的警察，在追查真相的过程中发现了惊天阴谋。",
+      "personality_traits": ["正直", "勇敢", "固执", "富有同情心"],
+      "speaking_style": "语气坚定，用词简洁有力，经常使用警察术语"
+    }
+  ]
+}
+
+请创造4个角色，直接输出JSON，不要有任何其他内容。`,
   });
 
-  return object.characters.map((char, index) => ({
-    id: `char_${index + 1}`,
-    ...char,
-  }));
+  // Parse the JSON response
+  try {
+    // Remove any markdown code blocks if present
+    const cleanedText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const parsed = JSON.parse(cleanedText);
+    
+    return parsed.characters.map((char: any, index: number) => ({
+      id: `char_${index + 1}`,
+      name: char.name,
+      bio: char.bio,
+      personality_traits: char.personality_traits,
+      speaking_style: char.speaking_style,
+    }));
+  } catch (error) {
+    console.error('Failed to parse character JSON:', error);
+    console.error('Raw response:', text);
+    throw new Error('Failed to generate characters: Invalid JSON response');
+  }
 }
 
 /**
@@ -75,9 +100,8 @@ export async function planNextScene(
     ? sceneSummaries.map((s) => `场景${s.scene_number}: ${s.summary}`).join('\n')
     : '这是第一场戏';
 
-  const { object } = await generateObject({
+  const { text } = await generateText({
     model,
-    schema: ScenePlanSchema,
     prompt: `你是一位富有远见的电影导演。你的任务是规划下一场戏的结构，而不是写对白。
 
 电影主题：${theme}
@@ -99,10 +123,32 @@ ${historyText}
 
 场景标题格式示例："内景. 侦探办公室 - 夜晚"
 
-请用中文规划这一场戏。`,
+**重要：你必须以纯JSON格式输出，不要包含任何markdown标记或其他文字。**
+
+输出格式示例：
+{
+  "scene_number": 1,
+  "heading": "内景. 侦探办公室 - 夜晚",
+  "setting": "一间昏暗的侦探办公室，墙上挂满案件照片",
+  "objective": "侦探接到神秘委托，开始调查",
+  "characters_present": ["张三", "李四"],
+  "mood": "紧张、神秘",
+  "opening_action": "侦探坐在办公桌前，翻看着案件卷宗，突然电话响起。",
+  "is_final_scene": false
+}
+
+请用中文规划这一场戏，直接输出JSON，不要有任何其他内容。`,
   });
 
-  return object;
+  try {
+    const cleanedText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const parsed = JSON.parse(cleanedText);
+    return parsed;
+  } catch (error) {
+    console.error('Failed to parse scene plan JSON:', error);
+    console.error('Raw response:', text);
+    throw new Error('Failed to plan scene: Invalid JSON response');
+  }
 }
 
 /**
@@ -171,12 +217,8 @@ export async function summarizeScene(
 
   const sceneContent = scriptLines.join('\n');
 
-  const { object } = await generateObject({
+  const { text } = await generateText({
     model,
-    schema: z.object({
-      summary: z.string().describe('场景摘要（2-3句话）'),
-      key_events: z.array(z.string()).describe('关键事件列表（3-5个要点）'),
-    }),
     prompt: `你是一位剧本分析师。请总结以下场景的内容。
 
 场景编号：${sceneNumber}
@@ -190,15 +232,38 @@ ${sceneContent}
 1. 简洁的场景摘要（2-3句话）
 2. 关键事件列表（3-5个要点）
 
-使用中文输出。`,
+**重要：你必须以纯JSON格式输出，不要包含任何markdown标记或其他文字。**
+
+输出格式示例：
+{
+  "summary": "侦探接到神秘委托，开始调查一起失踪案件。委托人神色紧张，似乎隐瞒了什么。",
+  "key_events": ["委托人来访", "描述失踪案情", "侦探接受委托", "发现疑点"]
+}
+
+使用中文输出，直接输出JSON，不要有任何其他内容。`,
   });
 
-  return {
-    scene_id: `scene_${sceneNumber}`,
-    scene_number: sceneNumber,
-    summary: object.summary,
-    key_events: object.key_events,
-  };
+  try {
+    const cleanedText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const parsed = JSON.parse(cleanedText);
+    
+    return {
+      scene_id: `scene_${sceneNumber}`,
+      scene_number: sceneNumber,
+      summary: parsed.summary,
+      key_events: parsed.key_events,
+    };
+  } catch (error) {
+    console.error('Failed to parse scene summary JSON:', error);
+    console.error('Raw response:', text);
+    // Fallback: return a basic summary
+    return {
+      scene_id: `scene_${sceneNumber}`,
+      scene_number: sceneNumber,
+      summary: `第${sceneNumber}场戏已完成`,
+      key_events: ['场景已完成'],
+    };
+  }
 }
 
 /**
@@ -250,12 +315,8 @@ export async function shouldEndScene(
 
   const recentContent = recentLines.slice(-8).join('\n');
 
-  const { object } = await generateObject({
+  const { text } = await generateText({
     model,
-    schema: z.object({
-      should_end: z.boolean().describe('场景是否应该结束'),
-      reason: z.string().describe('判断理由'),
-    }),
     prompt: `你是一位电影导演。判断当前场景是否应该结束。
 
 场景目标：${scenePlan.objective}
@@ -270,8 +331,24 @@ ${recentContent}
 2. 戏剧冲突是否已经展开
 3. 是否有合适的结束点
 
-请判断场景是否应该结束。`,
+**重要：你必须以纯JSON格式输出，不要包含任何markdown标记或其他文字。**
+
+输出格式示例：
+{
+  "should_end": true,
+  "reason": "场景目标已达成，冲突已展开"
+}
+
+请判断场景是否应该结束，直接输出JSON。`,
   });
 
-  return object.should_end;
+  try {
+    const cleanedText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const parsed = JSON.parse(cleanedText);
+    return parsed.should_end;
+  } catch (error) {
+    console.error('Failed to parse shouldEndScene JSON:', error);
+    // Fallback: end scene if we've had enough turns
+    return turnCount >= 10;
+  }
 }
