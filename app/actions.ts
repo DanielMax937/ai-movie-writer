@@ -4,25 +4,27 @@ import { generateText } from 'ai';
 import { z } from 'zod';
 import { customAI, getModelName } from '@/lib/ai-provider';
 import { smartGenerateObject } from '@/lib/ai-helpers';
+import { filterCharactersByNames } from '@/lib/character-utils';
+import { aiApiRetry } from '@/lib/retry-utils';
 import { Character, ScenePlan, DialogueOutput, SceneSummary } from '@/types/script';
 
 // Schemas for structured outputs
 const CharacterSchema = z.object({
   name: z.string().describe('角色名字（中文）'),
-  bio: z.string().describe('角色背景故事（2-3句话）'),
-  personality_traits: z.array(z.string()).describe('性格特征列表（3-4个特征）'),
-  speaking_style: z.string().describe('说话风格描述'),
+  bio: z.string().optional().describe('角色背景故事（2-3句话）'),
+  personality_traits: z.array(z.string()).optional().describe('性格特征列表（3-4个特征）'),
+  speaking_style: z.string().optional().describe('说话风格描述'),
 });
 
 const ScenePlanSchema = z.object({
   scene_number: z.number().describe('场景编号'),
   heading: z.string().describe('场景标题，格式：内景/外景. 地点 - 时间'),
-  setting: z.string().describe('场景设定的详细描述'),
+  setting: z.string().optional().describe('场景设定的详细描述'),
   objective: z.string().describe('本场景的戏剧目标'),
-  characters_present: z.array(z.string()).describe('出场角色名字列表'),
-  mood: z.string().describe('场景氛围'),
-  opening_action: z.string().describe('场景开场的动作描述'),
-  is_final_scene: z.boolean().describe('是否为最后一场戏'),
+  characters_present: z.array(z.string()).min(1).describe('出场角色名字列表'),
+  mood: z.string().optional().describe('场景氛围'),
+  opening_action: z.string().optional().describe('场景开场的动作描述'),
+  is_final_scene: z.boolean().default(false).describe('是否为最后一场戏'),
 });
 
 /**
@@ -50,9 +52,14 @@ export async function generateCharacters(theme: string): Promise<Character[]> {
     { temperature: 0.8 }
   );
 
+  // Add default values for fields that might be missing from API response
+  // This provides graceful fallback if the API returns simplified data
   return result.characters.map((char, index) => ({
     id: `char_${index + 1}`,
-    ...char,
+    name: char.name,
+    bio: char.bio || `${char.name}是故事中的重要角色，性格独特，对情节发展有重要影响。`,
+    personality_traits: char.personality_traits || ['智慧', '勇敢', '善良'],
+    speaking_style: char.speaking_style || '清晰自然的对话风格，表达直接',
   }));
 }
 
@@ -97,7 +104,16 @@ ${historyText}
     { temperature: 0.7 }
   );
 
-  return result;
+  // Add default values for optional fields to ensure robustness
+  return {
+    ...result,
+    setting: result.setting || `${result.heading}的场景`,
+    mood: result.mood || '自然流畅',
+    opening_action: result.opening_action || '角色进入场景',
+    characters_present: result.characters_present?.length > 0 
+      ? result.characters_present 
+      : characters.slice(0, 2).map(c => c.name),
+  };
 }
 
 /**
@@ -109,15 +125,17 @@ export async function generateDialogueLine(
   recentLines: string[],
   sceneObjective: string,
 ): Promise<DialogueOutput> {
-  const model = customAI(getModelName(), {
-    temperature: 0.9,
-  });
+  // Wrap in retry logic
+  return await aiApiRetry(async () => {
+    const model = customAI(getModelName(), {
+      temperature: 0.9,
+    });
 
-  const recentContext = recentLines.slice(-6).join('\n');
+    const recentContext = recentLines.slice(-6).join('\n');
 
-  const { text } = await generateText({
-    model,
-    prompt: `你是一位方法派演员，正在扮演角色：${character.name}
+    const { text } = await generateText({
+      model,
+      prompt: `你是一位方法派演员，正在扮演角色：${character.name}
 
 角色信息：
 - 背景：${character.bio}
@@ -143,13 +161,14 @@ ${recentContext || '（场景刚开始）'}
 如果需要动作，格式如：（犹豫地）我不知道该怎么办。
 
 请用中文输出台词：`,
-  });
+    });
 
-  return {
-    character_id: character.id,
-    character_name: character.name,
-    dialogue: text.trim(),
-  };
+    return {
+      character_id: character.id,
+      character_name: character.name,
+      dialogue: text.trim(),
+    };
+  });
 }
 
 /**
@@ -163,8 +182,8 @@ export async function summarizeScene(
   const sceneContent = scriptLines.join('\n');
 
   const schema = z.object({
-    summary: z.string().describe('场景摘要（2-3句话）'),
-    key_events: z.array(z.string()).describe('关键事件列表（3-5个要点）'),
+    summary: z.string().optional().describe('场景摘要（2-3句话）'),
+    key_events: z.array(z.string()).optional().describe('关键事件列表（3-5个要点）'),
   });
 
   try {
@@ -190,8 +209,10 @@ ${sceneContent}
     return {
       scene_id: `scene_${sceneNumber}`,
       scene_number: sceneNumber,
-      summary: result.summary,
-      key_events: result.key_events,
+      summary: result.summary || `第${sceneNumber}场戏：${scenePlan.heading}。${scenePlan.objective}`,
+      key_events: (result.key_events && result.key_events.length > 0)
+        ? result.key_events 
+        : [`场景目标：${scenePlan.objective}`],
     };
   } catch (error) {
     console.error('Failed to summarize scene:', error);
@@ -199,8 +220,8 @@ ${sceneContent}
     return {
       scene_id: `scene_${sceneNumber}`,
       scene_number: sceneNumber,
-      summary: `第${sceneNumber}场戏已完成`,
-      key_events: ['场景已完成'],
+      summary: `第${sceneNumber}场戏：${scenePlan.heading}。场景完成。`,
+      key_events: [`场景：${scenePlan.heading}`, `目标：${scenePlan.objective}`],
     };
   }
 }
@@ -214,12 +235,14 @@ export async function determineNextSpeaker(
   recentSpeakers: string[],
   turnCount: number,
 ): Promise<string> {
-  // Simple round-robin with some randomization
-  const availableCharacters = characters.filter((c) =>
-    scenePlan.characters_present.includes(c.name)
+  // Use fuzzy character name matching to handle AI variations
+  const availableCharacters = filterCharactersByNames(
+    characters,
+    scenePlan.characters_present
   );
 
   if (availableCharacters.length === 0) {
+    // Fallback: return first character if no matches found
     return characters[0].id;
   }
 
@@ -250,8 +273,8 @@ export async function shouldEndScene(
   const recentContent = recentLines.slice(-8).join('\n');
 
   const schema = z.object({
-    should_end: z.boolean().describe('场景是否应该结束'),
-    reason: z.string().describe('判断理由'),
+    should_end: z.boolean().default(false).describe('场景是否应该结束'),
+    reason: z.string().optional().describe('判断理由'),
   });
 
   try {
