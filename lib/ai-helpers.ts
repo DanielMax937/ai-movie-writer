@@ -9,6 +9,7 @@
 import { generateObject, generateText } from 'ai';
 import { z, ZodSchema } from 'zod';
 import { customAI, getModelName, hasStructuredOutputs } from './ai-provider';
+import { aiApiRetry } from './retry-utils';
 
 /**
  * Configuration for smart generate calls
@@ -17,6 +18,16 @@ export interface SmartGenerateConfig {
   temperature?: number;
   maxTokens?: number;
   system?: string;
+  /**
+   * Enable retry logic with exponential backoff
+   * @default true
+   */
+  enableRetry?: boolean;
+  /**
+   * Maximum number of retry attempts
+   * @default 5
+   */
+  maxRetries?: number;
 }
 
 /**
@@ -32,10 +43,11 @@ function cleanJsonResponse(text: string): string {
 /**
  * Smart object generation that uses structured outputs when available,
  * falls back to prompt engineering + JSON parsing otherwise.
+ * Includes automatic retry logic with exponential backoff.
  * 
  * @param schema - Zod schema for the expected output
  * @param prompt - User prompt for generation
- * @param config - Optional configuration (temperature, etc.)
+ * @param config - Optional configuration (temperature, retry options, etc.)
  * @returns Parsed object matching the schema
  */
 export async function smartGenerateObject<T extends ZodSchema>(
@@ -43,32 +55,37 @@ export async function smartGenerateObject<T extends ZodSchema>(
   prompt: string,
   config: SmartGenerateConfig = {}
 ): Promise<z.infer<T>> {
-  const model = customAI(getModelName(), {
-    temperature: config.temperature ?? 0.7,
-    maxTokens: config.maxTokens,
-  });
+  const enableRetry = config.enableRetry ?? true;
+  const maxRetries = config.maxRetries ?? 5;
 
-  // Try using structured outputs if supported
-  if (hasStructuredOutputs()) {
-    try {
-      console.log('Using structured outputs (generateObject)');
-      const { object } = await generateObject({
-        model,
-        schema,
-        prompt: config.system ? `${config.system}\n\n${prompt}` : prompt,
-      });
-      return object as z.infer<T>;
-    } catch (error) {
-      console.warn('Structured outputs failed, falling back to JSON parsing:', error);
-      // Fall through to fallback method
+  // Wrap the generation logic in retry handler
+  const generateFn = async () => {
+    const model = customAI(getModelName(), {
+      temperature: config.temperature ?? 0.7,
+      maxTokens: config.maxTokens,
+    });
+
+    // Try using structured outputs if supported
+    if (hasStructuredOutputs()) {
+      try {
+        console.log('Using structured outputs (generateObject)');
+        const { object } = await generateObject({
+          model,
+          schema,
+          prompt: config.system ? `${config.system}\n\n${prompt}` : prompt,
+        });
+        return object as z.infer<T>;
+      } catch (error) {
+        console.warn('Structured outputs failed, falling back to JSON parsing:', error);
+        // Fall through to fallback method
+      }
     }
-  }
 
-  // Fallback: Use generateText with explicit JSON formatting instructions
-  console.log('Using fallback method (generateText + JSON parsing)');
-  
-  // Build a comprehensive prompt that requests JSON
-  const jsonPrompt = `${config.system ? config.system + '\n\n' : ''}${prompt}
+    // Fallback: Use generateText with explicit JSON formatting instructions
+    console.log('Using fallback method (generateText + JSON parsing)');
+    
+    // Build a comprehensive prompt that requests JSON
+    const jsonPrompt = `${config.system ? config.system + '\n\n' : ''}${prompt}
 
 **IMPORTANT: You must respond with ONLY valid JSON that matches this exact schema. No markdown, no explanations, just pure JSON.**
 
@@ -82,25 +99,33 @@ ${generateExampleJson(schema)}
 
 Now generate the response as pure JSON (no markdown formatting):`;
 
-  const { text } = await generateText({
-    model,
-    prompt: jsonPrompt,
-  });
+    const { text } = await generateText({
+      model,
+      prompt: jsonPrompt,
+    });
 
-  // Clean and parse the response
-  try {
-    const cleanedText = cleanJsonResponse(text);
-    const parsed = JSON.parse(cleanedText);
-    
-    // Validate against schema
-    const validated = schema.parse(parsed);
-    return validated as z.infer<T>;
-  } catch (error) {
-    console.error('Failed to parse JSON response:', error);
-    console.error('Raw response:', text);
-    throw new Error(
-      `Failed to generate valid JSON: ${error instanceof Error ? error.message : 'Unknown error'}`
-    );
+    // Clean and parse the response
+    try {
+      const cleanedText = cleanJsonResponse(text);
+      const parsed = JSON.parse(cleanedText);
+      
+      // Validate against schema
+      const validated = schema.parse(parsed);
+      return validated as z.infer<T>;
+    } catch (error) {
+      console.error('Failed to parse JSON response:', error);
+      console.error('Raw response:', text);
+      throw new Error(
+        `Failed to generate valid JSON: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  };
+
+  // Execute with or without retry logic
+  if (enableRetry) {
+    return await aiApiRetry(generateFn, { maxRetries });
+  } else {
+    return await generateFn();
   }
 }
 

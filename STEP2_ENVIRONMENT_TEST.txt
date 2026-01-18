@@ -1,0 +1,20 @@
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2: ENVIRONMENT CONFIGURATION TEST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+TEST 2A: Check .env.local exists
+-rw-r--r--@   1 daniel  staff     187  1月 18 10:37 .env.local
+✅ .env.local exists
+
+TEST 2B: Verify .gitignore includes .env.local
+❌ .env.local NOT in .gitignore (SECURITY RISK)
+
+TEST 2C: Check required environment variables
+Checking .env.local contents...
+✅ CUSTOM_AI_BASE_URL found
+✅ CUSTOM_AI_API_KEY found
+✅ CUSTOM_AI_MODEL found
+
+TEST 2D: Development server check (quick start/stop test)
+Note: Dev server will be started and immediately stopped for testing
+⚠️  Development server may have issues (check manually)

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { StoryState, ActivityLog, OrchestratorPhase, ScriptLine } from '@/types/script';
+import { generateUniqueId } from './id-utils';
 
 interface WritersRoomState extends StoryState {
   // Orchestrator state
@@ -99,7 +100,7 @@ export const useWritersRoom = create<WritersRoomState>((set) => ({
         ...state.activityLogs,
         {
           ...log,
-          id: `log_${Date.now()}_${Math.random()}`,
+          id: generateUniqueId('log'),
           timestamp: new Date(),
         },
       ],

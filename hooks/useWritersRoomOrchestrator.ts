@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import { useWritersRoom } from '@/lib/store';
 import {
   generateCharacters,
@@ -8,10 +8,9 @@ import {
   determineNextSpeaker,
   shouldEndScene,
 } from '@/app/actions';
-import { ScriptLine, Character, ScenePlan } from '@/types/script';
+import { ScenePlan, ScriptLine } from '@/types/script';
 
 export function useWritersRoomOrchestrator() {
-  const store = useWritersRoom();
   const isRunningRef = useRef(false);
   const shouldStopRef = useRef(false);
 
@@ -23,26 +22,28 @@ export function useWritersRoomOrchestrator() {
     
     try {
       isRunningRef.current = true;
-      store.setTheme(theme);
-      store.setPhase('initializing');
-      store.addLog({
+      const currentStore = useWritersRoom.getState();
+      
+      currentStore.setTheme(theme);
+      currentStore.setPhase('initializing');
+      currentStore.addLog({
         agent: 'system',
         message: '正在初始化编剧室...',
         type: 'info',
       });
 
       // Phase 1: Generate characters
-      store.setPhase('casting');
-      store.addLog({
+      currentStore.setPhase('casting');
+      currentStore.addLog({
         agent: 'system',
         message: '正在召集演员...',
         type: 'action',
       });
 
       const characters = await generateCharacters(theme);
-      store.setCharacters(characters);
+      useWritersRoom.getState().setCharacters(characters);
 
-      store.addLog({
+      useWritersRoom.getState().addLog({
         agent: 'system',
         message: `已召集 ${characters.length} 位演员：${characters.map((c) => c.name).join('、')}`,
         type: 'complete',
@@ -53,106 +54,111 @@ export function useWritersRoomOrchestrator() {
         type: 'header',
         content: `《${theme}》`,
       };
-      store.addScriptLine(titleLine);
+      useWritersRoom.getState().addScriptLine(titleLine);
 
       isRunningRef.current = false;
       return characters;
     } catch (error) {
       console.error('Initialization error:', error);
-      store.setError('初始化失败：' + (error as Error).message);
+      const currentStore = useWritersRoom.getState();
+      currentStore.setError('初始化失败：' + (error as Error).message);
       isRunningRef.current = false;
       throw error;
     }
-  }, [store]);
+  }, []); // Remove store from dependencies
 
   /**
    * Start the automatic writing process
    */
   const startWriting = useCallback(async () => {
     if (isRunningRef.current) return;
-    if (store.characters.length === 0) {
-      store.setError('请先初始化角色');
+    
+    const currentStore = useWritersRoom.getState();
+    if (currentStore.characters.length === 0) {
+      currentStore.setError('请先初始化角色');
       return;
     }
 
     isRunningRef.current = true;
     shouldStopRef.current = false;
 
+    const runDirectorLoop = async () => {
+      // Always get fresh state by calling useWritersRoom.getState()
+      const getState = () => useWritersRoom.getState();
+      
+      while (!getState().is_finished && !shouldStopRef.current && !getState().isPaused) {
+        // Step A: Scene Planning
+        const scenePlan = await planScene();
+        
+        if (!scenePlan) break;
+
+        // Step B: Acting Loop
+        await runActingLoop(scenePlan);
+
+        // Step C: Summarization
+        await summarizeCurrentScene(scenePlan);
+
+        // Check if story should end
+        if (scenePlan.is_final_scene) {
+          getState().setIsFinished(true);
+          getState().setPhase('completed');
+          getState().addLog({
+            agent: 'system',
+            message: '剧本创作完成！',
+            type: 'complete',
+          });
+          break;
+        }
+
+        // Move to next scene
+        const currentState = getState();
+        currentState.setCurrentSceneIndex(currentState.current_scene_index + 1);
+
+        // Small delay between scenes
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    };
+
     try {
       await runDirectorLoop();
     } catch (error) {
       console.error('Writing error:', error);
-      store.setError('写作过程出错：' + (error as Error).message);
+      useWritersRoom.getState().setError('写作过程出错：' + (error as Error).message);
     } finally {
       isRunningRef.current = false;
     }
-  }, [store]);
-
-  /**
-   * The main director loop - runs continuously until story is finished
-   */
-  const runDirectorLoop = async () => {
-    while (!store.is_finished && !shouldStopRef.current && !store.isPaused) {
-      // Step A: Scene Planning
-      const scenePlan = await planScene();
-      
-      if (!scenePlan) break;
-
-      // Step B: Acting Loop
-      await runActingLoop(scenePlan);
-
-      // Step C: Summarization
-      await summarizeCurrentScene(scenePlan);
-
-      // Check if story should end
-      if (scenePlan.is_final_scene) {
-        store.setIsFinished(true);
-        store.setPhase('completed');
-        store.addLog({
-          agent: 'system',
-          message: '剧本创作完成！',
-          type: 'complete',
-        });
-        break;
-      }
-
-      // Move to next scene
-      store.setCurrentSceneIndex(store.current_scene_index + 1);
-
-      // Small delay between scenes
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-  };
+  }, []); // Remove store from dependencies
 
   /**
    * Plan the next scene
    */
   const planScene = async (): Promise<ScenePlan | null> => {
     try {
-      store.setPhase('planning_scene');
-      const sceneNumber = store.current_scene_index + 1;
+      const currentStore = useWritersRoom.getState();
+      currentStore.setPhase('planning_scene');
+      const sceneNumber = currentStore.current_scene_index + 1;
 
-      store.addLog({
+      currentStore.addLog({
         agent: 'director',
         message: `导演正在规划第 ${sceneNumber} 场戏...`,
         type: 'thinking',
       });
 
       const scenePlan = await planNextScene(
-        store.theme,
-        store.characters,
-        store.scene_summaries,
+        currentStore.theme,
+        currentStore.characters,
+        currentStore.scene_summaries,
         sceneNumber
       );
 
-      store.addLog({
+      currentStore.addLog({
         agent: 'director',
         message: `第 ${sceneNumber} 场：${scenePlan.heading}`,
         type: 'complete',
       });
 
       // Add scene to state
-      store.addScene({
+      currentStore.addScene({
         id: `scene_${sceneNumber}`,
         heading: scenePlan.heading,
         setting: scenePlan.setting,
@@ -166,19 +172,20 @@ export function useWritersRoomOrchestrator() {
         type: 'scene_heading',
         content: scenePlan.heading,
       };
-      store.addScriptLine(sceneHeading);
+      currentStore.addScriptLine(sceneHeading);
 
       // Add opening action
       const openingAction: ScriptLine = {
         type: 'action',
         content: scenePlan.opening_action,
       };
-      store.addScriptLine(openingAction);
+      currentStore.addScriptLine(openingAction);
 
       return scenePlan;
     } catch (error) {
       console.error('Scene planning error:', error);
-      store.setError('场景规划失败：' + (error as Error).message);
+      const currentStore = useWritersRoom.getState();
+      currentStore.setError('场景规划失败：' + (error as Error).message);
       return null;
     }
   };
@@ -187,8 +194,9 @@ export function useWritersRoomOrchestrator() {
    * Run the acting loop for a scene
    */
   const runActingLoop = async (scenePlan: ScenePlan) => {
-    store.setPhase('acting');
-    store.addLog({
+    const currentStore = useWritersRoom.getState();
+    currentStore.setPhase('acting');
+    currentStore.addLog({
       agent: 'director',
       message: `开拍第 ${scenePlan.scene_number} 场！`,
       type: 'action',
@@ -199,20 +207,22 @@ export function useWritersRoomOrchestrator() {
     let turnCount = 0;
     const maxTurns = 12;
 
-    while (turnCount < maxTurns && !shouldStopRef.current && !store.isPaused) {
+    while (turnCount < maxTurns && !shouldStopRef.current && !useWritersRoom.getState().isPaused) {
+      const freshStore = useWritersRoom.getState();
+      
       // Determine next speaker
       const speakerId = await determineNextSpeaker(
-        store.characters,
+        freshStore.characters,
         scenePlan,
         recentSpeakers,
         turnCount
       );
 
-      const character = store.characters.find((c) => c.id === speakerId);
+      const character = freshStore.characters.find((c) => c.id === speakerId);
       if (!character) break;
 
       // Log actor thinking
-      store.addLog({
+      freshStore.addLog({
         agent: 'actor',
         agent_name: character.name,
         message: `${character.name} 正在思考台词...`,
@@ -234,14 +244,14 @@ export function useWritersRoomOrchestrator() {
         speaker: character.name,
         character_id: character.id,
       };
-      store.addScriptLine(dialogueLine);
+      useWritersRoom.getState().addScriptLine(dialogueLine);
 
       // Update tracking
       recentSpeakers.push(speakerId);
       recentLines.push(`${character.name}: ${dialogue.dialogue}`);
       turnCount++;
 
-      store.addLog({
+      useWritersRoom.getState().addLog({
         agent: 'actor',
         agent_name: character.name,
         message: `${character.name}: ${dialogue.dialogue.substring(0, 50)}${dialogue.dialogue.length > 50 ? '...' : ''}`,
@@ -252,7 +262,7 @@ export function useWritersRoomOrchestrator() {
       if (turnCount >= 8) {
         const shouldEnd = await shouldEndScene(scenePlan, turnCount, recentLines);
         if (shouldEnd) {
-          store.addLog({
+          useWritersRoom.getState().addLog({
             agent: 'director',
             message: '导演喊停！这场戏完成了。',
             type: 'action',
@@ -271,23 +281,25 @@ export function useWritersRoomOrchestrator() {
    */
   const summarizeCurrentScene = async (scenePlan: ScenePlan) => {
     try {
-      store.setPhase('summarizing');
-      store.addLog({
+      const currentStore = useWritersRoom.getState();
+      currentStore.setPhase('summarizing');
+      currentStore.addLog({
         agent: 'summarizer',
         message: `正在总结第 ${scenePlan.scene_number} 场...`,
         type: 'thinking',
       });
 
       // Get script lines for this scene
-      const sceneStartIndex = store.script_lines.findIndex(
+      const freshStore = useWritersRoom.getState();
+      const sceneStartIndex = freshStore.script_lines.findIndex(
         (line) => line.type === 'scene_heading' && line.content === scenePlan.heading
       );
       
-      const nextSceneIndex = store.script_lines.findIndex(
+      const nextSceneIndex = freshStore.script_lines.findIndex(
         (line, idx) => idx > sceneStartIndex && line.type === 'scene_heading'
       );
 
-      const sceneLines = store.script_lines.slice(
+      const sceneLines = freshStore.script_lines.slice(
         sceneStartIndex,
         nextSceneIndex === -1 ? undefined : nextSceneIndex
       );
@@ -307,16 +319,17 @@ export function useWritersRoomOrchestrator() {
         [scriptContent]
       );
 
-      store.addSceneSummary(summary);
+      const finalStore = useWritersRoom.getState();
+      finalStore.addSceneSummary(summary);
 
       // Update overall summary
-      const newSummary = store.summary_so_far
-        ? `${store.summary_so_far}\n\n第${scenePlan.scene_number}场：${summary.summary}`
+      const newSummary = finalStore.summary_so_far
+        ? `${finalStore.summary_so_far}\n\n第${scenePlan.scene_number}场：${summary.summary}`
         : `第${scenePlan.scene_number}场：${summary.summary}`;
       
-      store.setSummary(newSummary);
+      finalStore.setSummary(newSummary);
 
-      store.addLog({
+      finalStore.addLog({
         agent: 'summarizer',
         message: `第 ${scenePlan.scene_number} 场总结完成`,
         type: 'complete',
@@ -332,21 +345,23 @@ export function useWritersRoomOrchestrator() {
    */
   const pause = useCallback(() => {
     shouldStopRef.current = true;
-    store.togglePause();
-    store.addLog({
+    const currentStore = useWritersRoom.getState();
+    currentStore.togglePause();
+    currentStore.addLog({
       agent: 'system',
       message: '已暂停',
       type: 'info',
     });
-  }, [store]);
+  }, []);
 
   /**
    * Resume the writing process
    */
   const resume = useCallback(async () => {
-    if (store.isPaused) {
-      store.togglePause();
-      store.addLog({
+    const currentStore = useWritersRoom.getState();
+    if (currentStore.isPaused) {
+      currentStore.togglePause();
+      currentStore.addLog({
         agent: 'system',
         message: '继续创作...',
         type: 'info',
@@ -354,7 +369,7 @@ export function useWritersRoomOrchestrator() {
       shouldStopRef.current = false;
       await startWriting();
     }
-  }, [store, startWriting]);
+  }, [startWriting]);
 
   /**
    * Reset the entire room
@@ -362,8 +377,8 @@ export function useWritersRoomOrchestrator() {
   const reset = useCallback(() => {
     shouldStopRef.current = true;
     isRunningRef.current = false;
-    store.reset();
-  }, [store]);
+    useWritersRoom.getState().reset();
+  }, []);
 
   return {
     initializeRoom,

@@ -6,6 +6,7 @@ import {
   loadApiKey,
   withoutTrailingSlash,
 } from '@ai-sdk/provider-utils';
+import { getAIProviderConfig } from './server-config';
 
 export interface CustomProviderSettings {
   /**
@@ -143,23 +144,56 @@ export function createCustomProvider(
 }
 
 // Export default instance with environment variables
-// Note: These will be undefined during build time, which is expected
-export const customAI = createCustomProvider({
-  baseURL: process.env.CUSTOM_API_BASE_URL,
-  apiKey: process.env.CUSTOM_API_KEY,
-  // Enable if your provider supports OpenAI-style structured outputs
-  // For Volcengine Ark, we'll test if this works; if not, we'll use the fallback
-  supportsStructuredOutputs: process.env.ENABLE_STRUCTURED_OUTPUTS === 'true',
-});
+// This should only be used server-side
+export function getCustomAI(): CustomProvider {
+  try {
+    const config = getAIProviderConfig();
+    
+    return createCustomProvider({
+      baseURL: config.baseURL,
+      apiKey: config.apiKey,
+      supportsStructuredOutputs: config.supportsStructuredOutputs,
+    });
+  } catch (error) {
+    console.error('Failed to get AI provider config:', error);
+    throw error;
+  }
+}
+
+// Legacy export for backward compatibility (will throw error if env vars not set)
+export const customAI = (() => {
+  // Check if we're in build time (no env vars available)
+  if (!process.env.CUSTOM_AI_BASE_URL) {
+    // Return a dummy provider that will throw at runtime if actually used
+    return createCustomProvider({
+      baseURL: 'https://placeholder.invalid',
+      apiKey: 'placeholder',
+      supportsStructuredOutputs: false,
+    });
+  }
+  
+  return getCustomAI();
+})();
 
 // Helper to get the configured model name
 export const getModelName = () => {
-  return process.env.CUSTOM_MODEL_NAME ?? 'ep-20251202111822-hw4kl';
+  try {
+    const config = getAIProviderConfig();
+    return config.model;
+  } catch {
+    // Fallback for build time
+    return process.env.CUSTOM_AI_MODEL ?? 'ep-20251202111822-hw4kl';
+  }
 };
 
 /**
  * Check if structured outputs are enabled
  */
 export const hasStructuredOutputs = () => {
-  return process.env.ENABLE_STRUCTURED_OUTPUTS === 'true';
+  try {
+    const config = getAIProviderConfig();
+    return config.supportsStructuredOutputs;
+  } catch {
+    return process.env.ENABLE_STRUCTURED_OUTPUTS === 'true';
+  }
 };

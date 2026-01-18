@@ -1,11 +1,16 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useWritersRoom } from '@/lib/store';
 import { useWritersRoomOrchestrator } from '@/hooks/useWritersRoomOrchestrator';
+import { useLoadingState } from '@/hooks/useLoadingState';
+import { useSafeTimeout } from '@/hooks/useSafeTimers';
+import { validateTheme } from '@/lib/validation';
+import { scriptInitLimiter, exportLimiter, startRateLimiterCleanup } from '@/lib/rate-limiter';
 import { CharacterCard } from '@/components/character-card';
 import { ScriptPanel } from '@/components/script-panel';
 import { ActivityLogPanel } from '@/components/activity-log-panel';
+import { LoadingSpinner, InlineLoader } from '@/components/loading';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
@@ -26,47 +31,111 @@ import {
   Copy,
   Loader2,
   Users,
+  AlertCircle,
 } from 'lucide-react';
 
 export default function HomePage() {
   const [theme, setTheme] = useState('');
+  const [themeError, setThemeError] = useState<string>();
   const [showCharacters, setShowCharacters] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
 
   const store = useWritersRoom();
   const orchestrator = useWritersRoomOrchestrator();
+  const initLoading = useLoadingState();
+  const copyLoading = useLoadingState();
+  const exportLoading = useLoadingState();
+  const { setTimeout: safeSetTimeout } = useSafeTimeout();
 
-  const handleStart = async () => {
-    if (!theme.trim()) return;
+  // Start rate limiter cleanup
+  useEffect(() => {
+    const cleanup = startRateLimiterCleanup();
+    return cleanup;
+  }, []);
 
-    try {
-      // Initialize with characters
-      await orchestrator.initializeRoom(theme);
-      setShowCharacters(true);
-
-      // Small delay to show characters, then start writing
-      setTimeout(() => {
-        setShowCharacters(false);
-        // Start writing (don't await here, let it run async)
-        orchestrator.startWriting().catch(err => {
-          console.error('Writing error:', err);
-        });
-      }, 3000);
-    } catch (error) {
-      console.error('Start error:', error);
+  const handleThemeChange = (value: string) => {
+    setTheme(value);
+    // Clear error when user types
+    if (themeError) {
+      setThemeError(undefined);
     }
   };
 
-  const handleExportText = () => {
-    exportAsText(store.script_lines, `${store.theme || '剧本'}.txt`);
+  const handleStart = async () => {
+    // Validate theme
+    const validation = validateTheme(theme);
+    if (!validation.isValid) {
+      setThemeError(validation.error);
+      return;
+    }
+
+    // Check rate limit
+    const rateLimitResult = scriptInitLimiter.tryConsume();
+    if (!rateLimitResult.allowed) {
+      const waitSeconds = Math.ceil((rateLimitResult.retryAfter || 0) / 1000);
+      setThemeError(`请求过于频繁，请等待 ${waitSeconds} 秒后重试`);
+      return;
+    }
+
+    // Use sanitized value
+    const sanitizedTheme = validation.sanitized!;
+
+    await initLoading.withLoading(async () => {
+      try {
+        // Initialize with characters
+        initLoading.setMessage('正在生成角色...');
+        await orchestrator.initializeRoom(sanitizedTheme);
+        setShowCharacters(true);
+
+        // Small delay to show characters, then start writing
+        initLoading.setMessage('准备开始创作...');
+        safeSetTimeout(() => {
+          setShowCharacters(false);
+          // Start writing (don't await here, let it run async)
+          orchestrator.startWriting().catch(err => {
+            console.error('Writing error:', err);
+            initLoading.setError('创作过程出错：' + err.message);
+          });
+        }, 3000);
+      } catch (error) {
+        console.error('Start error:', error);
+        throw error;
+      }
+    }, '正在初始化...');
+  };
+
+  const handleExportText = async () => {
+    // Check rate limit
+    const rateLimitResult = exportLimiter.tryConsume();
+    if (!rateLimitResult.allowed) {
+      exportLoading.setError('操作过于频繁，请稍后再试');
+      return;
+    }
+
+    await exportLoading.withLoading(async () => {
+      exportAsText(store.script_lines, `${store.theme || '剧本'}.txt`);
+      // Small delay to show feedback
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }, '正在导出...');
   };
 
   const handleCopy = async () => {
-    const success = await copyToClipboard(store.script_lines);
-    if (success) {
-      setCopySuccess(true);
-      setTimeout(() => setCopySuccess(false), 2000);
+    // Check rate limit
+    const rateLimitResult = exportLimiter.tryConsume();
+    if (!rateLimitResult.allowed) {
+      copyLoading.setError('操作过于频繁，请稍后再试');
+      return;
     }
+
+    await copyLoading.withLoading(async () => {
+      const success = await copyToClipboard(store.script_lines);
+      if (success) {
+        setCopySuccess(true);
+        safeSetTimeout(() => setCopySuccess(false), 2000);
+      } else {
+        throw new Error('复制失败');
+      }
+    }, '正在复制...');
   };
 
   const isIdle = store.phase === 'idle';
@@ -147,9 +216,13 @@ export default function HomePage() {
                     variant="outline"
                     size="sm"
                     onClick={handleCopy}
-                    disabled={store.script_lines.length === 0}
+                    disabled={store.script_lines.length === 0 || copyLoading.isLoading}
                   >
-                    <Copy className="w-4 h-4 mr-2" />
+                    {copyLoading.isLoading ? (
+                      <InlineLoader className="mr-2" />
+                    ) : (
+                      <Copy className="w-4 h-4 mr-2" />
+                    )}
                     {copySuccess ? '已复制！' : '复制'}
                   </Button>
 
@@ -157,9 +230,13 @@ export default function HomePage() {
                     variant="outline"
                     size="sm"
                     onClick={handleExportText}
-                    disabled={store.script_lines.length === 0}
+                    disabled={store.script_lines.length === 0 || exportLoading.isLoading}
                   >
-                    <Download className="w-4 h-4 mr-2" />
+                    {exportLoading.isLoading ? (
+                      <InlineLoader className="mr-2" />
+                    ) : (
+                      <Download className="w-4 h-4 mr-2" />
+                    )}
                     导出文本
                   </Button>
 
@@ -199,26 +276,37 @@ export default function HomePage() {
                   <Input
                     placeholder="例如：一个赛博侦探追捕失控的仿生人"
                     value={theme}
-                    onChange={(e) => setTheme(e.target.value)}
+                    onChange={(e) => handleThemeChange(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && theme.trim()) {
                         handleStart();
                       }
                     }}
                     className="text-lg"
+                    aria-invalid={!!themeError}
+                    aria-describedby={themeError ? 'theme-error' : undefined}
                   />
+                  {themeError && (
+                    <p id="theme-error" className="text-sm text-destructive mt-2 flex items-center gap-1">
+                      <AlertCircle className="w-4 h-4" />
+                      {themeError}
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground mt-2">
+                    5-200 个字符，至少包含 2 个词
+                  </p>
                 </div>
 
                 <Button
                   onClick={handleStart}
-                  disabled={!theme.trim() || isInitializing}
+                  disabled={!theme.trim() || initLoading.isLoading || isInitializing}
                   className="w-full"
                   size="lg"
                 >
-                  {isInitializing ? (
+                  {initLoading.isLoading || isInitializing ? (
                     <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      正在初始化...
+                      <InlineLoader className="mr-2" />
+                      {initLoading.message || '正在初始化...'}
                     </>
                   ) : (
                     <>
@@ -227,6 +315,25 @@ export default function HomePage() {
                     </>
                   )}
                 </Button>
+
+                {/* Error Display */}
+                {initLoading.error && (
+                  <div className="flex items-start gap-2 p-3 bg-destructive/10 border border-destructive/20 rounded-lg text-sm">
+                    <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-medium text-destructive">初始化失败</p>
+                      <p className="text-destructive/80 mt-1">{initLoading.error}</p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => initLoading.clearError()}
+                        className="mt-2"
+                      >
+                        重试
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="bg-muted p-4 rounded-lg">
@@ -257,10 +364,11 @@ export default function HomePage() {
               ))}
             </div>
             <div className="text-center mt-6">
-              <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" />
-              <p className="text-sm text-muted-foreground mt-2">
-                准备开始创作...
-              </p>
+              <LoadingSpinner 
+                size="lg" 
+                text="准备开始创作..." 
+                details="正在初始化编剧团队..."
+              />
             </div>
           </div>
         )}
